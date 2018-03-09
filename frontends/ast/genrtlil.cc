@@ -594,6 +594,9 @@ void AstNode::detectSignWidthWorker(int &width_hint, bool &sign_hint, bool *foun
 
 	switch (type)
 	{
+	case AST_NONE:
+		// unallocated enum, ignore
+		break;
 	case AST_CONSTANT:
 		width_hint = max(width_hint, int(bits.size()));
 		if (!is_signed)
@@ -610,8 +613,8 @@ void AstNode::detectSignWidthWorker(int &width_hint, bool &sign_hint, bool *foun
 		if (id_ast == NULL && current_scope.count(str))
 			id_ast = current_scope.at(str);
 		if (!id_ast)
-			log_file_error(filename, linenum, "Failed to resolve identifier %s for width detection!\n", str.c_str());
-		if (id_ast->type == AST_PARAMETER || id_ast->type == AST_LOCALPARAM) {
+			log_error("Failed to resolve identifier %s for width detection at %s:%d!\n", str.c_str(), filename.c_str(), linenum);
+		if (id_ast->type == AST_PARAMETER || id_ast->type == AST_LOCALPARAM || id_ast->type == AST_ENUM_ITEM) {
 			if (id_ast->children.size() > 1 && id_ast->children[1]->range_valid) {
 				this_width = id_ast->children[1]->range_left - id_ast->children[1]->range_right + 1;
 			} else
@@ -861,6 +864,8 @@ RTLIL::SigSpec AstNode::genRTLIL(int width_hint, bool sign_hint)
 	case AST_GENIF:
 	case AST_GENCASE:
 	case AST_PACKAGE:
+	case AST_ENUM:
+	case AST_USER_TYPE:
 	case AST_MODPORT:
 	case AST_MODPORTMEMBER:
 		break;
@@ -1001,7 +1006,7 @@ RTLIL::SigSpec AstNode::genRTLIL(int width_hint, bool sign_hint)
 				else
 					log_file_error(filename, linenum, "Identifier `%s' is implicitly declared and `default_nettype is set to none.\n", str.c_str());
 			}
-			else if (id2ast->type == AST_PARAMETER || id2ast->type == AST_LOCALPARAM) {
+			else if (id2ast->type == AST_PARAMETER || id2ast->type == AST_LOCALPARAM || id2ast->type == AST_ENUM_ITEM) {
 				if (id2ast->children[0]->type != AST_CONSTANT)
 					log_file_error(filename, linenum, "Parameter %s does not evaluate to constant value!\n", str.c_str());
 				chunk = RTLIL::Const(id2ast->children[0]->bits);

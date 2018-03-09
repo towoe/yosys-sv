@@ -55,13 +55,18 @@ namespace VERILOG_FRONTEND {
 }
 YOSYS_NAMESPACE_END
 
-#define SV_KEYWORD(_tok) \
-	if (sv_mode) return _tok; \
-	log("Lexer warning: The SystemVerilog keyword `%s' (at %s:%d) is not "\
-			"recognized unless read_verilog is called with -sv!\n", yytext, \
-			AST::current_filename.c_str(), frontend_verilog_yyget_lineno()); \
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext); \
+static int svWarning()
+{
+	log("Lexer warning: The SystemVerilog keyword `%s' (at %s:%d) is not "
+			"recognized unless read_verilog is called with -sv!\n",
+			yytext,
+			AST::current_filename.c_str(),
+			frontend_verilog_yyget_lineno());
+	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
 	return TOK_ID;
+}
+
+#define SV_KEYWORD(_tok)	(sv_mode ? _tok : svWarning())
 
 #define NON_KEYWORD() \
 	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext); \
@@ -69,6 +74,19 @@ YOSYS_NAMESPACE_END
 
 #define YY_INPUT(buf,result,max_size) \
 	result = readsome(*VERILOG_FRONTEND::lexin, buf, max_size)
+
+// Check if name corresponds to a user type
+static AstNode *lookupNameAsType(const char *name)
+{
+	std::string s = std::string("\\") + name;
+	if (user_types.count(s) > 0) {
+		auto node = user_types[s];
+		if (node->type == AST_USER_TYPE) {
+			return node;
+		}
+	}
+	return nullptr;
+}
 
 %}
 
@@ -151,8 +169,8 @@ YOSYS_NAMESPACE_END
 "specify"      { return specify_mode ? TOK_SPECIFY : TOK_IGNORED_SPECIFY; }
 "endspecify"   { return TOK_ENDSPECIFY; }
 "specparam"    { return TOK_SPECPARAM; }
-"package"      { SV_KEYWORD(TOK_PACKAGE); }
-"endpackage"   { SV_KEYWORD(TOK_ENDPACKAGE); }
+"package"      { return SV_KEYWORD(TOK_PACKAGE); }
+"endpackage"   { return SV_KEYWORD(TOK_ENDPACKAGE); }
 "interface"    { SV_KEYWORD(TOK_INTERFACE); }
 "endinterface" { SV_KEYWORD(TOK_ENDINTERFACE); }
 "modport"      { SV_KEYWORD(TOK_MODPORT); }
@@ -181,13 +199,13 @@ YOSYS_NAMESPACE_END
 "repeat"       { return TOK_REPEAT; }
 "automatic"    { return TOK_AUTOMATIC; }
 
-"unique"       { SV_KEYWORD(TOK_UNIQUE); }
-"unique0"      { SV_KEYWORD(TOK_UNIQUE); }
-"priority"     { SV_KEYWORD(TOK_PRIORITY); }
+"unique"       { return SV_KEYWORD(TOK_UNIQUE); }
+"unique0"      { return SV_KEYWORD(TOK_UNIQUE); }
+"priority"     { return SV_KEYWORD(TOK_PRIORITY); }
 
-"always_comb"  { SV_KEYWORD(TOK_ALWAYS); }
-"always_ff"    { SV_KEYWORD(TOK_ALWAYS); }
-"always_latch" { SV_KEYWORD(TOK_ALWAYS); }
+"always_comb"  { return SV_KEYWORD(TOK_ALWAYS); }
+"always_ff"    { return SV_KEYWORD(TOK_ALWAYS); }
+"always_latch" { return SV_KEYWORD(TOK_ALWAYS); }
 
  /* use special token for labels on assert, assume, cover, and restrict because it's insanley complex
     to fix parsing of cells otherwise. (the current cell parser forces a reduce very early to update some
@@ -197,22 +215,22 @@ YOSYS_NAMESPACE_END
 	return TOK_SVA_LABEL;
 }
 
-"assert"     { if (formal_mode) return TOK_ASSERT; SV_KEYWORD(TOK_ASSERT); }
-"assume"     { if (formal_mode) return TOK_ASSUME; SV_KEYWORD(TOK_ASSUME); }
-"cover"      { if (formal_mode) return TOK_COVER; SV_KEYWORD(TOK_COVER); }
-"restrict"   { if (formal_mode) return TOK_RESTRICT; SV_KEYWORD(TOK_RESTRICT); }
-"property"   { if (formal_mode) return TOK_PROPERTY; SV_KEYWORD(TOK_PROPERTY); }
-"rand"       { if (formal_mode) return TOK_RAND; SV_KEYWORD(TOK_RAND); }
-"const"      { if (formal_mode) return TOK_CONST; SV_KEYWORD(TOK_CONST); }
-"checker"    { if (formal_mode) return TOK_CHECKER; SV_KEYWORD(TOK_CHECKER); }
-"endchecker" { if (formal_mode) return TOK_ENDCHECKER; SV_KEYWORD(TOK_ENDCHECKER); }
-"final"      { SV_KEYWORD(TOK_FINAL); }
-"logic"      { SV_KEYWORD(TOK_LOGIC); }
-"var"        { SV_KEYWORD(TOK_VAR); }
-"bit"        { SV_KEYWORD(TOK_REG); }
+"assert"     { if (formal_mode) return TOK_ASSERT; return SV_KEYWORD(TOK_ASSERT); }
+"assume"     { if (formal_mode) return TOK_ASSUME; return SV_KEYWORD(TOK_ASSUME); }
+"cover"      { if (formal_mode) return TOK_COVER; return SV_KEYWORD(TOK_COVER); }
+"restrict"   { if (formal_mode) return TOK_RESTRICT; return SV_KEYWORD(TOK_RESTRICT); }
+"property"   { if (formal_mode) return TOK_PROPERTY; return SV_KEYWORD(TOK_PROPERTY); }
+"rand"       { if (formal_mode) return TOK_RAND; return SV_KEYWORD(TOK_RAND); }
+"const"      { if (formal_mode) return TOK_CONST; return SV_KEYWORD(TOK_CONST); }
+"checker"    { if (formal_mode) return TOK_CHECKER; return SV_KEYWORD(TOK_CHECKER); }
+"endchecker" { if (formal_mode) return TOK_ENDCHECKER; return SV_KEYWORD(TOK_ENDCHECKER); }
+"final"      { return SV_KEYWORD(TOK_FINAL); }
+"logic"      { return SV_KEYWORD(TOK_LOGIC); }
+"var"        { return SV_KEYWORD(TOK_VAR); }
+"bit"        { return SV_KEYWORD(TOK_REG); }
 
-"eventually"   { if (formal_mode) return TOK_EVENTUALLY; SV_KEYWORD(TOK_EVENTUALLY); }
-"s_eventually" { if (formal_mode) return TOK_EVENTUALLY; SV_KEYWORD(TOK_EVENTUALLY); }
+"eventually"   { if (formal_mode) return TOK_EVENTUALLY; return SV_KEYWORD(TOK_EVENTUALLY); }
+"s_eventually" { if (formal_mode) return TOK_EVENTUALLY; return SV_KEYWORD(TOK_EVENTUALLY); }
 
 "input"   { return TOK_INPUT; }
 "output"  { return TOK_OUTPUT; }
@@ -226,8 +244,14 @@ YOSYS_NAMESPACE_END
 "genvar"  { return TOK_GENVAR; }
 "real"    { return TOK_REAL; }
 
-"enum"    { SV_KEYWORD(TOK_ENUM); }
-"typedef" { SV_KEYWORD(TOK_TYPEDEF); }
+"enum"    { return SV_KEYWORD(TOK_ENUM); }
+"typedef" { return SV_KEYWORD(TOK_TYPEDEF); }
+"import"  { return SV_KEYWORD(TOK_IMPORT); }
+
+\'[01xzXZ] {
+	frontend_verilog_yylval.string = new std::string(yytext);
+	return SV_KEYWORD(TOK_CONST_FILL_BITS);
+}
 
 [0-9][0-9_]* {
 	frontend_verilog_yylval.string = new std::string(yytext);
@@ -314,9 +338,37 @@ supply1 { return TOK_SUPPLY1; }
 "$signed"   { return TOK_TO_SIGNED; }
 "$unsigned" { return TOK_TO_UNSIGNED; }
 
+[a-zA-Z_][a-zA-Z0-9_]*::[a-zA-Z_$][a-zA-Z0-9_$]* {
+	// hierarchical pattern p::t
+	auto node = lookupNameAsType(yytext);
+	if (node) {
+		// found it
+		frontend_verilog_yylval.ast = node;
+		//log("hier tok user type %s\n", s.c_str());
+		return TOK_USER_TYPE;
+	}
+	else {
+		// backup before :: just return first part
+		size_t len = strchr(yytext, ':') - yytext;
+		yyless(len);
+		frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
+		//log("backup, tok id %s\n", yytext);
+		return TOK_ID;
+	}
+}
+
 [a-zA-Z_$][a-zA-Z0-9_$]* {
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
-	return TOK_ID;
+	auto node = lookupNameAsType(yytext);
+	if (node) {
+		frontend_verilog_yylval.ast = node;
+		//log("user type %s found in user_types[]\n", s.c_str());
+		return TOK_USER_TYPE;
+	}
+	else {
+		frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
+		//log("tok id %s\n", yytext);
+		return TOK_ID;
+	}
 }
 
 [a-zA-Z_$][a-zA-Z0-9_$\.]* {

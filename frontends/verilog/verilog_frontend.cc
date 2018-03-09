@@ -47,6 +47,36 @@ static void error_on_dpi_function(AST::AstNode *node)
 		error_on_dpi_function(child);
 }
 
+// Prime the user_types[] symbol table with all the user types, enum values and localparam values
+// defined in the packages previously loaded so that import can find them and the lexer can check
+// if a name is a user type.
+static void addPackageTypes(std::map<std::string, AST::AstNode *>& user_types, std::vector<AST::AstNode *>& package_list)
+{
+	// we brute force this for now
+	// TODO track changes incrementally by package
+	user_types.clear();
+	for (auto pkg : package_list) {
+		log_assert(pkg->type==AST::AST_PACKAGE);
+		for (auto node: pkg->children) {
+			std::string s;
+			switch (node->type) {
+			case AST::AST_USER_TYPE:
+			case AST::AST_LOCALPARAM:
+				s = pkg->str + "::" + node->str.substr(1);
+				user_types[s] = node;
+				break;
+			case AST::AST_ENUM:
+				for (auto enode : node->children) {
+					s = pkg->str + "::" + enode->str.substr(1);
+					user_types[s] = enode;
+				}
+				break;
+			default: break;
+			}
+		}
+	}
+}
+
 struct VerilogFrontend : public Frontend {
 	VerilogFrontend() : Frontend("verilog", "read modules from Verilog file") { }
 	void help() YS_OVERRIDE
@@ -459,6 +489,9 @@ struct VerilogFrontend : public Frontend {
 
 		AST::process(design, current_ast, flag_dump_ast1, flag_dump_ast2, flag_no_dump_ptr, flag_dump_vlog1, flag_dump_vlog2, flag_dump_rtlil, flag_nolatches,
 				flag_nomeminit, flag_nomem2reg, flag_mem2reg, flag_noblackbox, lib_mode, flag_nowb, flag_noopt, flag_icells, flag_nooverwrite, flag_overwrite, flag_defer, default_nettype_wire);
+		// move symbols from loaded packages to local symbol table
+		// this should be in process() but there are enough args there already
+		addPackageTypes(user_types, design->verilog_packages);
 
 		if (!flag_nopp)
 			delete lexin;

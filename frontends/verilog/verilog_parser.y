@@ -51,6 +51,7 @@ namespace VERILOG_FRONTEND {
 	std::map<std::string, AstNode*> *attr_list, default_attr_list;
 	std::stack<std::map<std::string, AstNode*> *> attr_list_stack;
 	std::map<std::string, AstNode*> *albuf;
+	std::map<std::string, AstNode*> user_types;
 	std::vector<AstNode*> ast_stack;
 	struct AstNode *astbuf1, *astbuf2, *astbuf3;
 	struct AstNode *current_function_or_task;
@@ -108,6 +109,50 @@ struct specify_rise_fall {
 	specify_triple fall;
 };
 
+static AstNode *makeRange(int msb = 31, int lsb = 0, bool isSigned = true)
+{
+	auto range = new AstNode(AST_RANGE);
+	range->children.push_back(AstNode::mkconst_int(msb, true));
+	range->children.push_back(AstNode::mkconst_int(lsb, true));
+	range->is_signed = isSigned;
+	return range;
+}
+
+static void addRange(AstNode *parent, int msb = 31, int lsb = 0, bool isSigned = true)
+{
+	auto range = makeRange(msb, lsb, isSigned);
+	parent->children.push_back(range);
+}
+
+
+static bool addUserType(std::string prefix, std::string name, AstNode *node)
+{
+	auto base_name = prefix + name;
+	if (user_types.count(base_name) == 0) {
+		// no clash with local name
+		user_types[base_name] = node;
+		return true;
+	}
+	return false;
+}
+
+static void importAll(std::string& pkg_name)
+{
+	// import pkg::*
+	auto prefix = pkg_name + "::";
+	auto len = prefix.size();
+	for (auto &item : user_types) {
+		if (item.first.size() > len && prefix == item.first.substr(0, len)) {
+			// item found in package, drop prefix and add to local symbols
+			addUserType("\\", item.first.substr(len), item.second);
+		}
+	}
+	for (auto &item : user_types) {
+		log("sym: %s\n", item.first.c_str());
+	}
+
+}
+
 %}
 
 %define api.prefix {frontend_verilog_yy}
@@ -134,10 +179,12 @@ struct specify_rise_fall {
 
 %token <string> TOK_STRING TOK_ID TOK_CONSTVAL TOK_REALVAL TOK_PRIMITIVE
 %token <string> TOK_SVA_LABEL TOK_SPECIFY_OPER
+%token <string> TOK_CONST_FILL_BITS
+%token <ast> TOK_USER_TYPE
 %token TOK_ASSERT TOK_ASSUME TOK_RESTRICT TOK_COVER TOK_FINAL
 %token ATTR_BEGIN ATTR_END DEFATTR_BEGIN DEFATTR_END
 %token TOK_MODULE TOK_ENDMODULE TOK_PARAMETER TOK_LOCALPARAM TOK_DEFPARAM
-%token TOK_PACKAGE TOK_ENDPACKAGE TOK_PACKAGESEP
+%token TOK_PACKAGE TOK_ENDPACKAGE TOK_PACKAGESEP TOK_IMPORT
 %token TOK_INTERFACE TOK_ENDINTERFACE TOK_MODPORT TOK_VAR
 %token TOK_INPUT TOK_OUTPUT TOK_INOUT TOK_WIRE TOK_WAND TOK_WOR TOK_REG TOK_LOGIC
 %token TOK_INTEGER TOK_SIGNED TOK_ASSIGN TOK_ALWAYS TOK_INITIAL
@@ -155,6 +202,7 @@ struct specify_rise_fall {
 
 %type <ast> range range_or_multirange  non_opt_range non_opt_multirange range_or_signed_int
 %type <ast> wire_type expr basic_expr concat_list rvalue lvalue lvalue_concat_list
+%type <ast> opt_enum_init
 %type <string> opt_label opt_sva_label tok_prim_wrapper hierarchical_id
 %type <boolean> opt_signed opt_property unique_case_attr
 %type <al> attr case_attr
@@ -415,10 +463,14 @@ package:
 	};
 
 package_body:
-	package_body package_body_stmt |;
+	package_body package_body_stmt
+	| // optional
+	;
 
 package_body_stmt:
-	localparam_decl;
+	localparam_decl
+	| typedef_decl
+	;
 
 interface:
 	TOK_INTERFACE TOK_ID {
@@ -520,6 +572,12 @@ wire_type_token:
 	} |
 	TOK_CONST {
 		current_wire_const = true;
+	} |
+	TOK_USER_TYPE {
+			// copy from template
+			delete astbuf3;
+			astbuf3 = ($1)->clone();
+			astbuf3->type = AST_WIRE;
 	};
 
 non_opt_range:
@@ -583,6 +641,7 @@ module_body:
 
 module_body_stmt:
 	task_func_decl | specify_block |param_decl | localparam_decl | defparam_decl | specparam_declaration | wire_decl | assign_stmt | cell_stmt |
+	enum_decl | typedef_decl | import_stmt |
 	always_stmt | TOK_GENERATE module_gen_body TOK_ENDGENERATE | defattr | assert_property | checker_decl | ignored_specify_block;
 
 checker_decl:
@@ -1259,6 +1318,116 @@ single_defparam_decl:
 			node->children.push_back($1);
 		ast_stack.back()->children.push_back(node);
 	};
+
+enum_type: TOK_ENUM {
+		// create parent node for the enum
+		astbuf2 = new AstNode(AST_ENUM);
+		ast_stack.back()->children.push_back(astbuf2);
+		// create the template for the names
+		astbuf1 = new AstNode(AST_ENUM_ITEM);
+		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
+	 } param_signed enum_base_type '{' enum_name_list '}' {  // create template for the enum vars
+								auto tnode = astbuf1->clone();
+								delete astbuf1;
+								astbuf1 = tnode;
+								tnode->type = AST_WIRE;
+								// drop constant but keep any range
+								delete tnode->children[0];
+								tnode->children.erase(tnode->children.begin()); }
+	 ;
+
+enum_base_type: int_vec param_range
+	| int_atom
+	| /* nothing */		{ addRange(astbuf1); }
+	;
+
+int_atom: TOK_INTEGER		{ addRange(astbuf1); }		// probably should do byte, range [7:0] here
+	;
+
+int_vec: TOK_REG		{ astbuf1->is_reg = true; }	// lexer returns this for logic|bit too
+	;
+
+enum_name_list:
+	enum_name_decl
+	| enum_name_list ',' enum_name_decl
+	;
+
+enum_name_decl:
+	TOK_ID opt_enum_init {
+		// put in fn
+		log_assert(astbuf1);
+		log_assert(astbuf2);
+		auto node = astbuf1->clone();
+		node->str = *$1;
+		delete $1;
+		delete node->children[0];
+		node->children[0] = $2 ?: new AstNode(AST_NONE);
+		astbuf2->children.push_back(node);
+	}
+	;
+
+opt_enum_init:
+	'=' basic_expr		{ $$ = $2; }	// TODO: restrict this
+	| /* optional */	{ $$ = NULL; }
+	;
+
+enum_var_list:
+	enum_var
+	| enum_var_list ',' enum_var
+	;
+
+enum_var: TOK_ID {
+		log_assert(astbuf1);
+		log_assert(astbuf2);
+		auto node = astbuf1->clone();
+		ast_stack.back()->children.push_back(node);
+		node->str = *$1;
+		delete $1;
+		node->is_enum = true;
+	}
+	;
+
+enum_decl: enum_type enum_var_list ';'			{ delete astbuf1; }
+	;
+
+typedef_decl: TOK_TYPEDEF basic_type user_type ';'
+	;
+
+basic_type: enum_type
+	| vec_type  range	{ if ($2) astbuf1->children.push_back($2); }
+	| atom_type
+	| TOK_USER_TYPE		{ astbuf1 = ($1)->clone(); }
+	;
+
+atom_type: TOK_INTEGER		{ astbuf1 = new AstNode(AST_WIRE); }
+	;
+
+vec_type: TOK_REG		{ astbuf1 = new AstNode(AST_WIRE); astbuf1->is_reg = true; }
+	;
+
+user_type: TOK_ID {
+		log_assert(astbuf1);
+		if (!addUserType("", *$1, astbuf1)) {
+			frontend_verilog_yyerror("Type already defined.");
+		}
+		ast_stack.back()->children.push_back(astbuf1);
+		astbuf1->type = AST_USER_TYPE;
+		astbuf1->str = *$1;
+		delete $1;
+	}
+	;
+
+import_stmt: TOK_IMPORT pkg_item_list ';'
+	;
+
+pkg_item_list: pkg_item
+	| pkg_item_list ',' pkg_item
+	;
+
+pkg_item: TOK_USER_TYPE				{ addUserType("", $1->str, $1); }
+	| TOK_ID TOK_PACKAGESEP '*'		{ importAll(*$1); delete $1; }
+	| TOK_ID TOK_PACKAGESEP TOK_ID		// enum item or localparam, already loaded
+	;
 
 wire_decl:
 	attr wire_type range {
@@ -2229,6 +2398,11 @@ basic_expr:
 		$$ = const2ast(*$1, case_type_stack.size() == 0 ? 0 : case_type_stack.back(), !lib_mode);
 		if ($$ == NULL)
 			log_error("Value conversion failed: `%s'\n", $1->c_str());
+		delete $1;
+	} |
+	TOK_CONST_FILL_BITS {
+		// '0, '1, 'x, 'z
+		$$ = unsized_const2ast(*$1);
 		delete $1;
 	} |
 	TOK_REALVAL {

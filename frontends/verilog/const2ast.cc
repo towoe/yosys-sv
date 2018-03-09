@@ -246,4 +246,22 @@ AstNode *VERILOG_FRONTEND::const2ast(std::string code, char case_type, bool warn
 	return NULL;
 }
 
+// convert the Verilog code for a '0 or '1 constant to an AST node
+AstNode *VERILOG_FRONTEND::unsized_const2ast(std::string code)
+{
+	std::vector<RTLIL::State> data;
+	RTLIL::State bit;
+	switch (code.c_str()[1]) {
+	default:
+	case '0': bit = RTLIL::S0; break;
+	case '1': bit = RTLIL::S1; break;
+	case 'X':
+	case 'x': bit = RTLIL::Sx; break;
+	case 'Z':
+	case 'z': bit = RTLIL::Sz; break;
+	}
+	data.resize(32, bit);
+	return AstNode::mkconst_bits(data, false);
+}
+
 YOSYS_NAMESPACE_END
