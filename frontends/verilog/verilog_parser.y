@@ -471,6 +471,7 @@ package_body:
 package_body_stmt:
 	localparam_decl
 	| typedef_decl
+    | param_decl
 	;
 
 interface:
@@ -1345,7 +1346,10 @@ enum_base_type: int_vec param_range
 int_atom: TOK_INTEGER		{ addRange(astbuf1); }		// probably should do byte, range [7:0] here
 	;
 
-int_vec: TOK_REG		{ astbuf1->is_reg = true; }	// lexer returns this for logic|bit too
+int_vec: TOK_REG		{ astbuf1->is_reg = true; }	// lexer returns this for bit too
+	;
+
+int_vec: TOK_LOGIC		{ astbuf1->is_logic = true; }
 	;
 
 enum_name_list:
